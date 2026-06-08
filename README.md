@@ -85,8 +85,8 @@ syncspace/
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/aryaaman577/codealpha-project.git
-cd codealpha-project
+git clone https://github.com/aryaaman577/codealpha-taskss.git
+cd codealpha-taskss
 ```
 
 ### 2. Install dependencies
@@ -292,7 +292,7 @@ Free TURN options: [Metered TURN](https://www.metered.ca/tools/openrelay/), [Cot
 
 ## GitHub Submission
 
-**Repository:** [github.com/aryaaman577/codealpha-project](https://github.com/aryaaman577/codealpha-project)
+**Repository:** [github.com/aryaaman577/codealpha-taskss](https://github.com/aryaaman577/codealpha-taskss)
 
 **Submitted for:** CodeAlpha Task 4
 
