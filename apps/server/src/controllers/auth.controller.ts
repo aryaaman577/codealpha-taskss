@@ -484,6 +484,40 @@ export const googleCallback = async (req: Request, res: Response, next: NextFunc
         googleId: googleSub,
         provider: 'google',
         emailVerified: true,
+        bio: '',
+        customStatus: '',
+        status: 'offline',
+        role: 'user',
+        settings: {
+          notifications: {
+            email: true,
+            push: true,
+            sound: true,
+            mentions: true,
+            meetingReminders: true,
+          },
+          privacy: {
+            showOnlineStatus: true,
+            allowDirectMessages: true,
+            showLastSeen: true,
+          },
+          appearance: {
+            theme: 'dark',
+            fontSize: 'medium',
+            compactMode: false,
+          },
+          meeting: {
+            defaultCameraOn: false,
+            defaultMicOn: false,
+            defaultSpeaker: 'default',
+          },
+        },
+        stats: {
+          totalMeetings: 0,
+          totalHours: 0,
+          messagesCount: 0,
+          filesShared: 0,
+        },
       });
       // Re-fetch with refreshTokens selected (cast to satisfy TS)
       user = (await User.findById(created._id).select('+refreshTokens')) as typeof user;

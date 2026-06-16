@@ -21,14 +21,18 @@ import { env } from './config/env';
 const app = express();
 
 const allowedOrigins = env.CLIENT_URL
-  ? env.CLIENT_URL.split(',').map((o) => o.trim())
+  ? env.CLIENT_URL.split(',').map((o) => o.trim().replace(/\/$/, ''))
   : ['http://localhost:3000'];
 
 app.use(helmet());
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin || allowedOrigins.includes(origin)) {
+      if (!origin) {
+        return callback(null, true);
+      }
+      const normalizedOrigin = origin.trim().replace(/\/$/, '');
+      if (allowedOrigins.includes(normalizedOrigin)) {
         callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
