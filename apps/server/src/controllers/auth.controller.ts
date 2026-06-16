@@ -23,17 +23,14 @@ import { AuthRequest } from '../middleware/auth.middleware';
 
 const setTokenCookies = (res: Response, accessToken: string, refreshToken: string) => {
   const isProduction = env.NODE_ENV === 'production';
-  const cookieDomain = env.COOKIE_DOMAIN && env.COOKIE_DOMAIN !== 'localhost' ? env.COOKIE_DOMAIN : undefined;
   const common: {
     httpOnly: boolean;
     secure: boolean;
     sameSite: 'lax';
-    domain?: string;
   } = {
     httpOnly: true,
     secure: isProduction,
     sameSite: 'lax',
-    ...(cookieDomain ? { domain: cookieDomain } : {}),
   };
 
   res.cookie('access_token', accessToken, {
