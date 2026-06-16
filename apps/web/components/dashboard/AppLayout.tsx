@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
@@ -32,8 +32,78 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const router = useRouter();
   const pathname = usePathname();
   const { user, isAuthenticated, isLoading, fetchUser, logout } = useAuthStore();
-  const { sidebarOpen, toggleSidebar } = useUIStore();
+  const { sidebarOpen, toggleSidebar, setSidebarOpen } = useUIStore();
   const { unreadCount, fetchNotifications, addNotification } = useNotificationStore();
+
+  const [mounted, setMounted] = useState(false);
+  const touchStartX = useRef<number>(0);
+  const touchCurrentX = useRef<number>(0);
+
+  // Set mounted state and default mobile sidebar to closed
+  useEffect(() => {
+    setMounted(true);
+    if (window.innerWidth < 768) {
+      setSidebarOpen(false);
+    }
+  }, [setSidebarOpen]);
+
+  // Lock body scroll when sidebar is open on mobile
+  useEffect(() => {
+    const updateScrollLock = () => {
+      if (sidebarOpen && typeof window !== 'undefined' && window.innerWidth < 768) {
+        document.body.style.overflow = 'hidden';
+      } else {
+        document.body.style.overflow = '';
+      }
+    };
+
+    updateScrollLock();
+    window.addEventListener('resize', updateScrollLock);
+
+    return () => {
+      document.body.style.overflow = '';
+      window.removeEventListener('resize', updateScrollLock);
+    };
+  }, [sidebarOpen]);
+
+  // Handle Escape key to close menu on mobile
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && sidebarOpen) {
+        if (typeof window !== 'undefined' && window.innerWidth < 768) {
+          setSidebarOpen(false);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [sidebarOpen, setSidebarOpen]);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    touchStartX.current = e.touches[0].clientX;
+    touchCurrentX.current = e.touches[0].clientX;
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    touchCurrentX.current = e.touches[0].clientX;
+  };
+
+  const handleTouchEnd = () => {
+    const deltaX = touchCurrentX.current - touchStartX.current;
+    // Swipe left (negative deltaX) to close the left sidebar drawer
+    if (deltaX < -60) {
+      setSidebarOpen(false);
+    }
+  };
+
+  const handleNavItemClick = () => {
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setSidebarOpen(false);
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -109,17 +179,41 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   return (
     <div className="min-h-screen bg-bg-base text-text-primary flex overflow-x-hidden">
+      {/* Blurred Backdrop for Mobile Drawer */}
+      {mounted && sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 md:hidden transition-opacity duration-300"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar Navigation */}
       <aside
-        className={`fixed inset-y-0 left-0 z-30 w-64 border-r border-border-subtle bg-bg-surface/90 backdrop-blur-lg transform transition-transform duration-300 ${
-          sidebarOpen ? 'translate-x-0' : '-translate-x-0 md:-translate-x-64'
+        id="mobile-sidebar"
+        aria-label="Sidebar Navigation"
+        className={`fixed inset-y-0 left-0 z-50 w-64 border-r border-border-subtle bg-bg-surface/90 backdrop-blur-lg transform ${
+          mounted ? 'transition-transform duration-300' : ''
+        } ${
+          !mounted
+            ? '-translate-x-full md:translate-x-0 pointer-events-none md:pointer-events-auto'
+            : sidebarOpen
+            ? 'translate-x-0 pointer-events-auto'
+            : '-translate-x-full md:-translate-x-64 pointer-events-none'
         }`}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
       >
         <div className="h-16 flex items-center justify-between px-6 border-b border-border-subtle">
-          <Link href="/dashboard" className="flex items-center">
+          <Link href="/dashboard" className="flex items-center" onClick={handleNavItemClick}>
             <Logo size={28} />
           </Link>
-          <button onClick={toggleSidebar} className="md:hidden text-text-secondary hover:text-white">
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(false)}
+            className="md:hidden text-text-secondary hover:text-white p-2 -mr-2 rounded-lg hover:bg-bg-elevated transition-colors cursor-pointer"
+            aria-label="Close menu"
+          >
             <X size={20} />
           </button>
         </div>
@@ -130,6 +224,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
               <Link
                 key={item.name}
                 href={item.href}
+                onClick={handleNavItemClick}
                 className={`flex items-center justify-between px-4 py-3 rounded-2xl text-sm font-medium transition duration-200 ${
                   active
                     ? 'bg-accent-primary/10 border border-accent-primary/30 text-accent-cyan'
@@ -181,7 +276,14 @@ export default function AppLayout({ children }: AppLayoutProps) {
         {/* Header bar */}
         <header className="h-16 border-b border-border-subtle bg-bg-surface/50 backdrop-blur-md flex items-center justify-between px-6 sticky top-0 z-20">
           <div className="flex items-center gap-4">
-            <button onClick={toggleSidebar} className="text-text-secondary hover:text-white p-1 rounded-lg hover:bg-bg-elevated transition">
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="text-text-secondary hover:text-white p-2 rounded-lg hover:bg-bg-elevated transition-colors cursor-pointer"
+              aria-label="Open menu"
+              aria-expanded={sidebarOpen}
+              aria-controls="mobile-sidebar"
+            >
               <Menu size={20} />
             </button>
             <h2 className="text-lg font-semibold tracking-wide text-text-primary capitalize">
