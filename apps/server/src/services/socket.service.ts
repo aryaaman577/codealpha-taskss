@@ -16,11 +16,45 @@ const activeSocketsByUser = new Map<string, Set<string>>();
 const activeStatus = new Map<string, ActiveUser>();
 const meetingRooms = new Map<string, Set<string>>();
 
+function getActiveParticipants(io: SocketIOServer, room: string) {
+  const roomSockets = meetingRooms.get(room);
+  if (!roomSockets) return [];
+
+  const list: any[] = [];
+  const seenUserIds = new Set<string>();
+
+  for (const socketId of roomSockets) {
+    const s = io.sockets.sockets.get(socketId);
+    if (s && s.data?.user) {
+      const u = s.data.user;
+      // Prevent duplicates if same userId is connected via multiple sockets
+      if (!seenUserIds.has(u._id)) {
+        seenUserIds.add(u._id);
+        list.push({
+          userId: u._id,
+          name: u.displayName,
+          email: u.email || '',
+          avatar: u.avatar || '',
+          socketId: socketId,
+          joinedAt: s.data.joinedAt || new Date().toISOString(),
+          audioMuted: s.data.audioMuted ?? false,
+          videoMuted: s.data.videoMuted ?? false,
+          screenSharing: s.data.screenSharing ?? false,
+          handRaised: s.data.handRaised ?? false,
+        });
+      }
+    }
+  }
+  return list;
+}
+
 type UserSocketData = {
   user: {
     _id: string;
     displayName: string;
     username?: string;
+    email?: string;
+    avatar?: string;
   };
 };
 
@@ -95,13 +129,15 @@ export function configureSocket(io: SocketIOServer) {
       const userId = getUserIdFromAccessToken(accessToken);
       if (!userId) return next(new Error('Unauthorized'));
 
-      const user = await User.findById(userId).select('_id displayName username');
+      const user = await User.findById(userId).select('_id displayName username email avatar');
       if (!user) return next(new Error('Unauthorized'));
 
       (socket.data as UserSocketData).user = {
         _id: user._id.toString(),
         displayName: user.displayName,
         username: user.username,
+        email: (user as any).email || '',
+        avatar: (user as any).avatar || '',
       };
 
       next();
@@ -139,7 +175,13 @@ export function configureSocket(io: SocketIOServer) {
             ? Array.from(userSockSet).some((sid) => sid !== socket.id && roomSockets?.has(sid))
             : false;
 
-          socket.to(room).emit('rtc:peer:left', { userId, socketId: socket.id });
+          // Broadcast updated participant list
+          const participantsList = getActiveParticipants(io, room);
+          io.to(room).emit('meeting:participants:sync', participantsList);
+
+          if (process.env.NODE_ENV !== 'production') {
+            console.log(`[DEV LOG] User disconnected. roomId: ${roomId}, socket.id: ${socket.id}, active count: ${participantsList.length}`);
+          }
 
           if (!hasOtherSocketsInRoom) {
             socket.to(room).emit('meeting:participant-left', { roomId, userId });
@@ -282,6 +324,20 @@ export function configureSocket(io: SocketIOServer) {
       const roomSockets = meetingRooms.get(room)!;
       roomSockets.add(socket.id);
 
+      socket.data.joinedAt = new Date().toISOString();
+
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[DEV LOG] Socket ${socket.id} joining roomId: ${data.roomId}`);
+      }
+
+      // Broadcast updated participant list
+      const participantsList = getActiveParticipants(io, room);
+      io.to(room).emit('meeting:participants:sync', participantsList);
+
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[DEV LOG] Server roomId: ${data.roomId} participant count: ${participantsList.length}`);
+      }
+
       const already = meeting.participants.some((participant) => participant.user.toString() === userId);
 
       if (!already) {
@@ -368,6 +424,14 @@ export function configureSocket(io: SocketIOServer) {
       }
 
       socket.to(room).emit('rtc:peer:left', { userId, socketId: socket.id });
+
+      // Broadcast updated participant list
+      const participantsList = getActiveParticipants(io, room);
+      io.to(room).emit('meeting:participants:sync', participantsList);
+
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[DEV LOG] Socket ${socket.id} left roomId: ${data.roomId}, active count: ${participantsList.length}`);
+      }
     });
 
     socket.on('meeting:media-state-changed', (data: { roomId: string; audioMuted?: boolean; videoMuted?: boolean; screenSharing?: boolean; handRaised?: boolean }) => {
@@ -385,6 +449,10 @@ export function configureSocket(io: SocketIOServer) {
         screenSharing: data.screenSharing,
         handRaised: data.handRaised,
       });
+
+      // Broadcast updated participant list
+      const participantsList = getActiveParticipants(io, room);
+      io.to(room).emit('meeting:participants:sync', participantsList);
     });
 
     socket.on('meeting:participant:mute', async (data: { roomId: string; muted: boolean }) => {

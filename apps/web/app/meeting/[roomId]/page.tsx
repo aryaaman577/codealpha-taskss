@@ -150,10 +150,14 @@ export default function MeetingRoomPage() {
 
   // Handle local video element binding
   useEffect(() => {
-    if (localStream && localVideoRef.current) {
-      localVideoRef.current.srcObject = localStream;
+    if (localVideoRef.current) {
+      if (screenSharing && screenStream) {
+        localVideoRef.current.srcObject = screenStream;
+      } else if (localStream) {
+        localVideoRef.current.srcObject = localStream;
+      }
     }
-  }, [localStream, joined]);
+  }, [localStream, screenStream, screenSharing, joined]);
 
   const disconnectWebRTC = () => {
     Object.keys(pcs.current).forEach((sid) => {
@@ -345,12 +349,24 @@ export default function MeetingRoomPage() {
     // Stream tracks from remote peer
     pc.ontrack = (event) => {
       console.log('ontrack received for socket:', socketId, event);
-      if (event.streams && event.streams[0]) {
-        addRemoteStream(socketId, event.streams[0]);
+      const currentStreams = useMeetingStore.getState().remoteStreams;
+      const existingStream = currentStreams[socketId];
+
+      if (existingStream) {
+        const hasTrack = existingStream.getTracks().some((t) => t.id === event.track.id);
+        if (!hasTrack) {
+          existingStream.addTrack(event.track);
+          console.log(`Added track ${event.track.kind} to existing remote stream for peer ${socketId}`);
+        }
+        // Always clone to guarantee a new stream reference and trigger React updates
+        addRemoteStream(socketId, new MediaStream(existingStream.getTracks()));
       } else {
-        const fallbackStream = new MediaStream();
-        fallbackStream.addTrack(event.track);
-        addRemoteStream(socketId, fallbackStream);
+        const newStream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream();
+        if (!newStream.getTracks().some((t) => t.id === event.track.id)) {
+          newStream.addTrack(event.track);
+        }
+        console.log(`Created new remote stream with track ${event.track.kind} for peer ${socketId}`);
+        addRemoteStream(socketId, new MediaStream(newStream.getTracks()));
       }
     };
 
@@ -576,6 +592,13 @@ export default function MeetingRoomPage() {
       setParticipants(updatedParticipants);
     };
 
+    const onParticipantsSync = (updatedParticipants: any[]) => {
+      if (process.env.NODE_ENV !== 'production') {
+        console.log('[DEV LOG] Received participant list on frontend:', updatedParticipants);
+      }
+      setParticipants(updatedParticipants);
+    };
+
     const onChatMessageNew = (msg: any) => {
       setChatLogs((logs) => [...logs, msg]);
     };
@@ -616,6 +639,7 @@ export default function MeetingRoomPage() {
     socket.on('meeting:participant:media-state', onParticipantMediaState);
 
     socket.on('meeting:participants:update', onParticipantsUpdate);
+    socket.on('meeting:participants:sync', onParticipantsSync);
     socket.on('chat:message:new', onChatMessageNew);
     socket.on('whiteboard:object:add', onWhiteboardObjectAdd);
 
@@ -629,6 +653,7 @@ export default function MeetingRoomPage() {
       socket.off('meeting:participant:media-state', onParticipantMediaState);
 
       socket.off('meeting:participants:update', onParticipantsUpdate);
+      socket.off('meeting:participants:sync', onParticipantsSync);
       socket.off('chat:message:new', onChatMessageNew);
       socket.off('whiteboard:object:add', onWhiteboardObjectAdd);
     };
@@ -717,6 +742,7 @@ export default function MeetingRoomPage() {
           }
 
           screenTrack.onended = async () => {
+            if (!useMeetingStore.getState().screenSharing) return;
             stream.getTracks().forEach((track) => track.stop());
             setScreenStream(null);
             setScreenSharing(false);
@@ -908,13 +934,13 @@ export default function MeetingRoomPage() {
             <div className="w-full h-full max-w-5xl grid gap-4 grid-cols-1 md:grid-cols-2">
               {/* Local Stream Video Box */}
               <div className="relative rounded-[28px] overflow-hidden border border-border-default bg-bg-surface flex items-center justify-center shadow-card aspect-video">
-                {videoEnabled ? (
+                {videoEnabled || screenSharing ? (
                   <video
                     ref={localVideoRef}
                     autoPlay
                     playsInline
                     muted
-                    className="h-full w-full object-cover scale-x-[-1]"
+                    className={`h-full w-full object-cover ${screenSharing ? '' : 'scale-x-[-1]'}`}
                   />
                 ) : (
                   <div className="flex flex-col items-center justify-center gap-3">
@@ -1094,32 +1120,31 @@ export default function MeetingRoomPage() {
               {/* Participants View */}
               {activeTab === 'participants' && (
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between p-2.5 rounded-xl bg-bg-base/30 border border-border-subtle">
-                    <div className="flex items-center gap-2">
-                      <div className="h-6 w-6 rounded-full bg-accent-primary flex items-center justify-center text-xs font-bold text-white">
-                        {user?.displayName?.charAt(0).toUpperCase()}
-                      </div>
-                      <span className="text-xs text-text-primary">{user?.displayName} (You)</span>
-                    </div>
-                    <div className="flex gap-2 text-xs">
-                      {handRaised && '✋'}
-                      {!audioEnabled && '🔇'}
-                    </div>
-                  </div>
-                  {Object.values(remotePeers).map((peer) => (
-                    <div key={peer.socketId} className="flex items-center justify-between p-2.5 rounded-xl bg-bg-base/30 border border-border-subtle">
-                      <div className="flex items-center gap-2">
-                        <div className="h-6 w-6 rounded-full bg-accent-cyan flex items-center justify-center text-xs font-bold text-white">
-                          {peer.displayName?.charAt(0).toUpperCase()}
+                  {participants.map((p: any) => {
+                    const participantUserId = p.userId || p.user?._id;
+                    const isMe = participantUserId === user?._id;
+                    const displayName = p.name || p.user?.displayName || 'Participant';
+                    const isAudioMuted = p.audioMuted !== undefined ? p.audioMuted : (p.audioEnabled === false);
+                    const isHandRaised = p.handRaised ?? false;
+                    const key = p.socketId || p.userId || p.user?._id || Math.random().toString();
+                    
+                    return (
+                      <div key={key} className="flex items-center justify-between p-2.5 rounded-xl bg-bg-base/30 border border-border-subtle">
+                        <div className="flex items-center gap-2">
+                          <div className={`h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold text-white ${isMe ? 'bg-accent-primary' : 'bg-accent-cyan'}`}>
+                            {displayName.charAt(0).toUpperCase()}
+                          </div>
+                          <span className="text-xs text-text-primary">
+                            {displayName} {isMe ? '(You)' : ''}
+                          </span>
                         </div>
-                        <span className="text-xs text-text-primary">{peer.displayName}</span>
+                        <div className="flex gap-2 text-xs">
+                          {isHandRaised && '✋'}
+                          {isAudioMuted && '🔇'}
+                        </div>
                       </div>
-                      <div className="flex gap-2 text-xs">
-                        {peer.handRaised && '✋'}
-                        {peer.audioMuted && '🔇'}
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>
