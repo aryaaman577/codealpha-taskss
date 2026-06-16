@@ -124,16 +124,9 @@ export function configureSocket(io: SocketIOServer) {
 
     socket.join(`user:${userId}`);
 
-    socket.on('disconnect', async () => {
-      const userSockets = activeSocketsByUser.get(userId);
-      if (userSockets) userSockets.delete(socket.id);
-
-      if (userSockets && userSockets.size === 0) {
-        activeSocketsByUser.delete(userId);
-        await setUserPresence(io, userId, false, new Date()).catch(() => {});
-      }
-
-      socket.rooms.forEach((room) => {
+    socket.on('disconnecting', async () => {
+      const rooms = socket.rooms;
+      rooms.forEach((room) => {
         if (room.startsWith('meeting:')) {
           const roomId = room.replace('meeting:', '');
           const roomSockets = meetingRooms.get(room);
@@ -142,7 +135,9 @@ export function configureSocket(io: SocketIOServer) {
           }
 
           const userSockSet = activeSocketsByUser.get(userId);
-          const hasOtherSocketsInRoom = userSockSet ? Array.from(userSockSet).some((sid) => roomSockets?.has(sid)) : false;
+          const hasOtherSocketsInRoom = userSockSet
+            ? Array.from(userSockSet).some((sid) => sid !== socket.id && roomSockets?.has(sid))
+            : false;
 
           socket.to(room).emit('rtc:peer:left', { userId, socketId: socket.id });
 
@@ -167,6 +162,16 @@ export function configureSocket(io: SocketIOServer) {
           }
         }
       });
+    });
+
+    socket.on('disconnect', async () => {
+      const userSockets = activeSocketsByUser.get(userId);
+      if (userSockets) userSockets.delete(socket.id);
+
+      if (userSockets && userSockets.size === 0) {
+        activeSocketsByUser.delete(userId);
+        await setUserPresence(io, userId, false, new Date()).catch(() => {});
+      }
     });
 
     // Presence events (explicit)
@@ -260,7 +265,7 @@ export function configureSocket(io: SocketIOServer) {
     });
 
     // Meeting realtime
-    socket.on('meeting:join', async (data: { roomId: string }) => {
+    socket.on('meeting:join', async (data: { roomId: string; audioMuted?: boolean; videoMuted?: boolean }) => {
       const meeting = await Meeting.findOne({ roomId: data.roomId });
       if (!meeting) return socket.emit('meeting:error', { message: 'Meeting not found' });
       if (meeting.settings.lockMeeting) return socket.emit('meeting:error', { message: 'Meeting is locked' });
@@ -268,8 +273,14 @@ export function configureSocket(io: SocketIOServer) {
       const room = `meeting:${data.roomId}`;
       socket.join(room);
 
+      socket.data.audioMuted = data.audioMuted ?? false;
+      socket.data.videoMuted = data.videoMuted ?? false;
+      socket.data.screenSharing = false;
+      socket.data.handRaised = false;
+
       if (!meetingRooms.has(room)) meetingRooms.set(room, new Set());
-      meetingRooms.get(room)!.add(socket.id);
+      const roomSockets = meetingRooms.get(room)!;
+      roomSockets.add(socket.id);
 
       const already = meeting.participants.some((participant) => participant.user.toString() === userId);
 
@@ -279,8 +290,8 @@ export function configureSocket(io: SocketIOServer) {
           role: 'participant',
           joinedAt: new Date(),
           duration: 0,
-          audioEnabled: true,
-          videoEnabled: true,
+          audioEnabled: !socket.data.audioMuted,
+          videoEnabled: !socket.data.videoMuted,
           screenSharing: false,
           handRaised: false,
         });
@@ -291,7 +302,37 @@ export function configureSocket(io: SocketIOServer) {
       }
 
       socket.data.currentRoom = data.roomId;
-      socket.to(room).emit('rtc:peer:joined', { userId, socketId: socket.id });
+
+      // Compile active peers info for the joining socket
+      const activePeers = Array.from(roomSockets)
+        .filter((sid) => sid !== socket.id)
+        .map((sid) => {
+          const s = io.sockets.sockets.get(sid);
+          return {
+            socketId: sid,
+            userId: s?.data?.user?._id,
+            displayName: s?.data?.user?.displayName || 'Participant',
+            avatar: s?.data?.user?.avatar,
+            audioMuted: s?.data?.audioMuted ?? false,
+            videoMuted: s?.data?.videoMuted ?? false,
+            screenSharing: s?.data?.screenSharing ?? false,
+            handRaised: s?.data?.handRaised ?? false,
+          };
+        });
+
+      socket.emit('meeting:room-active-peers', activePeers);
+
+      // Notify other participants in the room
+      socket.to(room).emit('rtc:peer:joined', {
+        userId,
+        socketId: socket.id,
+        displayName: (socket.data as UserSocketData).user.displayName,
+        avatar: (socket.data as any).user?.avatar,
+        audioMuted: socket.data.audioMuted,
+        videoMuted: socket.data.videoMuted,
+        screenSharing: socket.data.screenSharing,
+        handRaised: socket.data.handRaised,
+      });
 
       const populatedMeeting = await Meeting.findOne({ roomId: data.roomId })
         .populate('participants.user', 'displayName username avatar');
@@ -327,6 +368,23 @@ export function configureSocket(io: SocketIOServer) {
       }
 
       socket.to(room).emit('rtc:peer:left', { userId, socketId: socket.id });
+    });
+
+    socket.on('meeting:media-state-changed', (data: { roomId: string; audioMuted?: boolean; videoMuted?: boolean; screenSharing?: boolean; handRaised?: boolean }) => {
+      const room = `meeting:${data.roomId}`;
+      if (data.audioMuted !== undefined) socket.data.audioMuted = data.audioMuted;
+      if (data.videoMuted !== undefined) socket.data.videoMuted = data.videoMuted;
+      if (data.screenSharing !== undefined) socket.data.screenSharing = data.screenSharing;
+      if (data.handRaised !== undefined) socket.data.handRaised = data.handRaised;
+
+      // Broadcast to other participants in the room
+      socket.to(room).emit('meeting:participant:media-state', {
+        socketId: socket.id,
+        audioMuted: data.audioMuted,
+        videoMuted: data.videoMuted,
+        screenSharing: data.screenSharing,
+        handRaised: data.handRaised,
+      });
     });
 
     socket.on('meeting:participant:mute', async (data: { roomId: string; muted: boolean }) => {
