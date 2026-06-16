@@ -18,5 +18,9 @@ router.patch('/profile', protect, authController.updateProfile);
 router.post('/avatar', protect, authController.uploadAvatar);
 router.get('/users/search', protect, authController.searchUsers);
 
+// Google OAuth
+router.get('/google', authController.googleStart);
+router.get('/google/callback', authController.googleCallback);
+
 export default router;
 

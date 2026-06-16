@@ -24,6 +24,11 @@ const envSchema = z.object({
   TURN_SERVER_URL: z.string().optional(),
   TURN_USERNAME: z.string().optional(),
   TURN_CREDENTIAL: z.string().optional(),
+
+  // Google OAuth
+  GOOGLE_CLIENT_ID: z.string().optional(),
+  GOOGLE_CLIENT_SECRET: z.string().optional(),
+  GOOGLE_CALLBACK_URL: z.string().optional(),
 });
 
 const parseEnv = () => {

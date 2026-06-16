@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
+import { OAuth2Client } from 'google-auth-library';
 import User from '../models/User';
 import { AppError } from '../utils/AppError';
 import { sendSuccess, sendError } from '../utils/apiResponse';
@@ -24,7 +25,7 @@ const setTokenCookies = (res: Response, accessToken: string, refreshToken: strin
   const common = {
     httpOnly: true,
     secure: env.NODE_ENV === 'production',
-    sameSite: 'strict' as const,
+    sameSite: 'lax' as const,
     domain: env.COOKIE_DOMAIN || undefined,
   };
 
@@ -390,6 +391,112 @@ export const searchUsers = async (req: AuthRequest, res: Response, next: NextFun
     return sendSuccess(res, { users });
   } catch (err) {
     next(err);
+  }
+};
+
+// ── Google OAuth ────────────────────────────────────────────
+
+const getGoogleClient = () => {
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_CALLBACK_URL) {
+    throw new AppError('Google OAuth is not configured', 500);
+  }
+  return new OAuth2Client(
+    env.GOOGLE_CLIENT_ID,
+    env.GOOGLE_CLIENT_SECRET,
+    env.GOOGLE_CALLBACK_URL,
+  );
+};
+
+export const googleStart = async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const client = getGoogleClient();
+    const authorizeUrl = client.generateAuthUrl({
+      access_type: 'offline',
+      scope: ['openid', 'email', 'profile'],
+      prompt: 'select_account',
+    });
+    res.redirect(authorizeUrl);
+  } catch (err) {
+    next(err);
+  }
+};
+
+export const googleCallback = async (req: Request, res: Response, next: NextFunction) => {
+  const clientUrl = env.CLIENT_URL.split(',')[0].trim();
+  try {
+    const code = req.query.code as string | undefined;
+    if (!code) {
+      return res.redirect(`${clientUrl}/login?error=google_auth_failed`);
+    }
+
+    const client = getGoogleClient();
+    const { tokens } = await client.getToken(code);
+    client.setCredentials(tokens);
+
+    const ticket = await client.verifyIdToken({
+      idToken: tokens.id_token!,
+      audience: env.GOOGLE_CLIENT_ID!,
+    });
+    const payload = ticket.getPayload();
+
+    if (!payload || !payload.email || !payload.email_verified) {
+      return res.redirect(`${clientUrl}/login?error=google_auth_failed`);
+    }
+
+    const googleEmail = payload.email.toLowerCase();
+    const googleName = payload.name || googleEmail.split('@')[0];
+    const googleAvatar = payload.picture || '';
+    const googleSub = payload.sub;
+
+    let user = await User.findOne({ email: googleEmail }).select('+refreshTokens +googleId');
+
+    if (!user) {
+      // Generate a unique username from the email prefix
+      const baseUsername = googleEmail.split('@')[0].replace(/[^a-z0-9_]/g, '_').slice(0, 15);
+      let username = baseUsername;
+      let suffix = 1;
+      while (await User.findOne({ username })) {
+        username = `${baseUsername.slice(0, 14)}${suffix}`;
+        suffix++;
+      }
+
+      const created = await User.create({
+        username,
+        email: googleEmail,
+        displayName: googleName,
+        avatar: googleAvatar,
+        googleId: googleSub,
+        provider: 'google',
+        emailVerified: true,
+      });
+      // Re-fetch with refreshTokens selected (cast to satisfy TS)
+      user = (await User.findById(created._id).select('+refreshTokens')) as typeof user;
+    } else {
+      // Existing user — link Google account safely (never overwrite password)
+      if (!user.googleId) user.googleId = googleSub;
+      if (!user.avatar && googleAvatar) user.avatar = googleAvatar;
+      user.emailVerified = true;
+      await user.save({ validateBeforeSave: false });
+    }
+
+    if (!user) {
+      return res.redirect(`${clientUrl}/login?error=google_auth_failed`);
+    }
+
+    // Issue tokens using existing helpers
+    const accessToken = signAccessToken(user._id.toString());
+    const newRefreshToken = signRefreshToken(user._id.toString());
+    user.refreshTokens.push(newRefreshToken);
+    user.lastSeen = new Date();
+    await user.save({ validateBeforeSave: false });
+
+    setTokenCookies(res, accessToken, newRefreshToken);
+
+    // Redirect to dashboard — tokens are in HttpOnly cookies, not in URL
+    return res.redirect(`${clientUrl}/dashboard`);
+  } catch (err) {
+    console.error('Google OAuth callback error:', err);
+    return res.redirect(`${clientUrl}/login?error=google_auth_failed`);
   }
 };
 

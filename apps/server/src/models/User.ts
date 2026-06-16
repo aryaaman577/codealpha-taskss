@@ -36,13 +36,15 @@ export interface IUserStats {
 export interface IUserDocument extends Document {
   username: string;
   email: string;
-  password: string;
+  password?: string;
   displayName: string;
   avatar: string;
   bio: string;
   status: 'online' | 'offline' | 'idle' | 'dnd';
   customStatus: string;
   role: 'user' | 'admin';
+  googleId?: string;
+  provider: 'local' | 'google';
   settings: IUserSettings;
   stats: IUserStats;
   connections: mongoose.Types.ObjectId[];
@@ -108,9 +110,20 @@ const userSchema = new Schema<IUserDocument>(
     },
     password: {
       type: String,
-      required: true,
+      required: false,
       minlength: 8,
       select: false,
+    },
+    googleId: {
+      type: String,
+      sparse: true,
+      unique: true,
+      select: false,
+    },
+    provider: {
+      type: String,
+      enum: ['local', 'google'],
+      default: 'local',
     },
     displayName: {
       type: String,
@@ -156,7 +169,7 @@ userSchema.index({ username: 1 });
 userSchema.index({ status: 1 });
 
 userSchema.pre('save', async function (next) {
-  if (!this.isModified('password')) return next();
+  if (!this.isModified('password') || !this.password) return next();
   this.password = await bcrypt.hash(this.password, 12);
   next();
 });
@@ -164,6 +177,7 @@ userSchema.pre('save', async function (next) {
 userSchema.methods.comparePassword = async function (
   candidatePassword: string,
 ): Promise<boolean> {
+  if (!this.password) return false;
   return bcrypt.compare(candidatePassword, this.password);
 };
 
