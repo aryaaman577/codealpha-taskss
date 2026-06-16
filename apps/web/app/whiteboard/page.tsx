@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import AppLayout from '@/components/dashboard/AppLayout';
 import { useAuthStore } from '@/stores/auth.store';
 import { useWhiteboardStore } from '@/stores/whiteboard.store';
@@ -14,7 +14,9 @@ import {
   Trash2,
   Download,
   MousePointer,
-  Sparkles
+  Sparkles,
+  Undo2,
+  Redo2
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -36,6 +38,25 @@ export default function WhiteboardPage() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [isDrawing, setIsDrawing] = useState(false);
+
+  // History stacks for undo/redo (ImageData snapshots)
+  const undoStackRef = useRef<ImageData[]>([]);
+  const redoStackRef = useRef<ImageData[]>([]);
+  const [historyVersion, setHistoryVersion] = useState(0); // trigger re-render for button states
+
+  /** Save current canvas state to undo stack */
+  const pushUndoSnapshot = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    undoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    // Limit stack size to prevent memory issues
+    if (undoStackRef.current.length > 50) {
+      undoStackRef.current.shift();
+    }
+    setHistoryVersion((v) => v + 1);
+  }, []);
 
   // Join the global whiteboard room
   useEffect(() => {
@@ -59,6 +80,10 @@ export default function WhiteboardPage() {
       if (ctx) {
         ctx.fillStyle = canvasBackground;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
+        // Save initial blank state
+        undoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
+        redoStackRef.current = [];
+        setHistoryVersion((v) => v + 1);
       }
     }
 
@@ -68,12 +93,20 @@ export default function WhiteboardPage() {
   }, []);
 
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    // Save snapshot BEFORE starting a new stroke
+    pushUndoSnapshot();
+    // Clear redo stack on new drawing action
+    redoStackRef.current = [];
+    setHistoryVersion((v) => v + 1);
+
     setIsDrawing(true);
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     canvas.setAttribute('data-last-x', x.toString());
     canvas.setAttribute('data-last-y', y.toString());
   };
@@ -83,8 +116,10 @@ export default function WhiteboardPage() {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
     const lastX = parseFloat(canvas.getAttribute('data-last-x') || '0');
     const lastY = parseFloat(canvas.getAttribute('data-last-y') || '0');
 
@@ -99,6 +134,53 @@ export default function WhiteboardPage() {
   };
 
   const handleMouseUp = () => {
+    setIsDrawing(false);
+  };
+
+  // Touch support
+  const handleTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    pushUndoSnapshot();
+    redoStackRef.current = [];
+    setHistoryVersion((v) => v + 1);
+
+    setIsDrawing(true);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const touch = e.touches[0];
+    const x = (touch.clientX - rect.left) * scaleX;
+    const y = (touch.clientY - rect.top) * scaleY;
+    canvas.setAttribute('data-last-x', x.toString());
+    canvas.setAttribute('data-last-y', y.toString());
+  };
+
+  const handleTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const touch = e.touches[0];
+    const x = (touch.clientX - rect.left) * scaleX;
+    const y = (touch.clientY - rect.top) * scaleY;
+    const lastX = parseFloat(canvas.getAttribute('data-last-x') || '0');
+    const lastY = parseFloat(canvas.getAttribute('data-last-y') || '0');
+
+    const drawColor = tool === 'erase' ? canvasBackground : color;
+    const drawSize = tool === 'erase' ? brushSize * 4 : brushSize;
+
+    drawOnCanvas(lastX, lastY, x, y, drawColor, drawSize, true);
+
+    canvas.setAttribute('data-last-x', x.toString());
+    canvas.setAttribute('data-last-y', y.toString());
+  };
+
+  const handleTouchEnd = () => {
     setIsDrawing(false);
   };
 
@@ -137,15 +219,55 @@ export default function WhiteboardPage() {
     }
   };
 
+  /** Undo: restore previous canvas snapshot */
+  const handleUndo = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    if (undoStackRef.current.length <= 1) return; // keep initial blank state
+
+    // Pop current state and push to redo
+    const currentState = undoStackRef.current.pop()!;
+    redoStackRef.current.push(currentState);
+
+    // Restore previous state
+    const previousState = undoStackRef.current[undoStackRef.current.length - 1];
+    ctx.putImageData(previousState, 0, 0);
+    setHistoryVersion((v) => v + 1);
+  };
+
+  /** Redo: restore last undone state */
+  const handleRedo = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    if (redoStackRef.current.length === 0) return;
+
+    const stateToRestore = redoStackRef.current.pop()!;
+    undoStackRef.current.push(stateToRestore);
+    ctx.putImageData(stateToRestore, 0, 0);
+    setHistoryVersion((v) => v + 1);
+  };
+
+  /** Clear All: undoable — saves snapshot before clearing */
   const handleClear = () => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    // Save current state before clearing (so Clear All is undoable)
+    pushUndoSnapshot();
+    redoStackRef.current = [];
+
     ctx.fillStyle = canvasBackground;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     clearCanvas();
-    toast.success('Canvas cleared locally');
+    toast.success('Canvas cleared — use Undo to restore');
   };
 
   const handleDownload = () => {
@@ -167,6 +289,9 @@ export default function WhiteboardPage() {
   ];
 
   const colors = ['#6366f1', '#06b6d4', '#a855f7', '#10b981', '#f59e0b', '#ef4444', '#f1f5f9'];
+
+  const canUndo = undoStackRef.current.length > 1;
+  const canRedo = redoStackRef.current.length > 0;
 
   return (
     <AppLayout>
@@ -219,18 +344,34 @@ export default function WhiteboardPage() {
           {/* Actions */}
           <div className="flex gap-2">
             <button
+              onClick={handleUndo}
+              disabled={!canUndo}
+              className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-bg-base border border-border-default hover:border-border-strong text-text-secondary hover:text-white transition flex items-center gap-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Undo (one stroke)"
+            >
+              <Undo2 size={14} /> Undo
+            </button>
+            <button
+              onClick={handleRedo}
+              disabled={!canRedo}
+              className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-bg-base border border-border-default hover:border-border-strong text-text-secondary hover:text-white transition flex items-center gap-1.5 text-xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed"
+              title="Redo"
+            >
+              <Redo2 size={14} /> Redo
+            </button>
+            <button
               onClick={handleDownload}
-              className="p-2 rounded-xl bg-bg-base border border-border-default hover:border-border-strong text-text-secondary hover:text-white transition flex items-center gap-1.5 text-xs font-semibold"
+              className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-bg-base border border-border-default hover:border-border-strong text-text-secondary hover:text-white transition flex items-center gap-1.5 text-xs font-semibold"
               title="Download canvas"
             >
               <Download size={14} /> Download
             </button>
             <button
               onClick={handleClear}
-              className="p-2 rounded-xl bg-semantic-error/15 border border-semantic-error/30 text-semantic-error hover:bg-semantic-error hover:text-white transition flex items-center gap-1.5 text-xs font-semibold"
-              title="Clear drawing"
+              className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-semantic-error/15 border border-semantic-error/30 text-semantic-error hover:bg-semantic-error hover:text-white transition flex items-center gap-1.5 text-xs font-semibold"
+              title="Clear All (undoable)"
             >
-              <Trash2 size={14} /> Clear
+              <Trash2 size={14} /> Clear All
             </button>
           </div>
         </div>
@@ -246,7 +387,10 @@ export default function WhiteboardPage() {
               onMouseMove={handleMouseMove}
               onMouseUp={handleMouseUp}
               onMouseLeave={handleMouseUp}
-              className="w-full h-full cursor-crosshair"
+              onTouchStart={handleTouchStart}
+              onTouchMove={handleTouchMove}
+              onTouchEnd={handleTouchEnd}
+              className="w-full h-full cursor-crosshair touch-none"
             />
           </div>
         </div>

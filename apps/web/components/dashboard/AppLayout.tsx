@@ -166,6 +166,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
   }
 
   const menuItems = [
+    { name: 'Home', icon: <Compass size={18} />, href: '/' },
     { name: 'Dashboard', icon: <LayoutDashboard size={18} />, href: '/dashboard' },
     { name: 'Meetings', icon: <Video size={18} />, href: '/meetings' },
     { name: 'Channels & Chat', icon: <MessageSquare size={18} />, href: '/chat' },

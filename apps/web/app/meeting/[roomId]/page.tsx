@@ -137,6 +137,11 @@ export default function MeetingRoomPage() {
   const [brushColor, setBrushColor] = useState('#6366f1');
   const [brushSize, setBrushSize] = useState(4);
 
+  // Whiteboard history stacks for undo/redo
+  const wbUndoStackRef = useRef<ImageData[]>([]);
+  const wbRedoStackRef = useRef<ImageData[]>([]);
+  const [wbHistoryVersion, setWbHistoryVersion] = useState(0);
+
   const localVideoRef = useRef<HTMLVideoElement>(null);
   const socketToUserMap = useRef<{ [socketId: string]: string }>({});
   const cleanupSocketHandlersRef = useRef<(() => void) | null>(null);
@@ -179,7 +184,13 @@ export default function MeetingRoomPage() {
     // Leave meeting only once, but keep it safe if called before join completed
     if (roomId) {
       try {
-        if (socket.connected) socket.emit('meeting:leave', { roomId });
+        if (socket.connected) {
+          socket.emit('meeting:leave', { roomId });
+          // Leave chat channel
+          if (activeMeeting?._id) {
+            socket.emit('chat:leave', { roomId: activeMeeting._id, type: 'meeting' });
+          }
+        }
       } catch {
         // ignore
       }
@@ -240,6 +251,12 @@ export default function MeetingRoomPage() {
         audioMuted: !micEnabled,
         videoMuted: !cameraEnabled,
       });
+
+      // Join the meeting chat channel so chat messages propagate
+      if (activeMeeting?._id) {
+        socket.emit('chat:join', { roomId: activeMeeting._id, type: 'meeting' });
+      }
+
       toast.success('Joined meeting room');
     } catch (err: any) {
       console.error(err);
@@ -342,7 +359,14 @@ export default function MeetingRoomPage() {
       setParticipants(updatedParticipants);
     };
 
+    // Deduplicate chat messages by _id
+    const seenMsgIds = new Set<string>();
     const onChatMessageNew = (msg: any) => {
+      const msgId = msg._id || msg.messageId;
+      if (msgId) {
+        if (seenMsgIds.has(msgId)) return;
+        seenMsgIds.add(msgId);
+      }
       setChatLogs((logs) => [...logs, msg]);
     };
 
@@ -381,6 +405,7 @@ export default function MeetingRoomPage() {
     socket.on('meeting:participants:update', onParticipantsUpdate);
     socket.on('meeting:participants:sync', onParticipantsSync);
     socket.on('chat:message:new', onChatMessageNew);
+    socket.on('message:new', onChatMessageNew);
     socket.on('whiteboard:object:add', onWhiteboardObjectAdd);
 
     return () => {
@@ -392,6 +417,7 @@ export default function MeetingRoomPage() {
       socket.off('meeting:participants:update', onParticipantsUpdate);
       socket.off('meeting:participants:sync', onParticipantsSync);
       socket.off('chat:message:new', onChatMessageNew);
+      socket.off('message:new', onChatMessageNew);
       socket.off('whiteboard:object:add', onWhiteboardObjectAdd);
     };
   };
@@ -432,7 +458,20 @@ export default function MeetingRoomPage() {
   };
 
   // 4. Whiteboard Draw Actions
+  const wbPushUndo = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    wbUndoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    if (wbUndoStackRef.current.length > 50) wbUndoStackRef.current.shift();
+    setWbHistoryVersion((v) => v + 1);
+  }, []);
+
   const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    wbPushUndo();
+    wbRedoStackRef.current = [];
+    setWbHistoryVersion((v) => v + 1);
     setIsDrawing(true);
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -496,6 +535,79 @@ export default function MeetingRoomPage() {
         size,
       });
     }
+  };
+
+  // Whiteboard touch handlers
+  const handleWbTouchStart = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    wbPushUndo();
+    wbRedoStackRef.current = [];
+    setWbHistoryVersion((v) => v + 1);
+    setIsDrawing(true);
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const touch = e.touches[0];
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+    canvas.setAttribute('data-last-x', x.toString());
+    canvas.setAttribute('data-last-y', y.toString());
+  };
+
+  const handleWbTouchMove = (e: React.TouchEvent<HTMLCanvasElement>) => {
+    e.preventDefault();
+    if (!isDrawing) return;
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const touch = e.touches[0];
+    const x = touch.clientX - rect.left;
+    const y = touch.clientY - rect.top;
+    const lastX = parseFloat(canvas.getAttribute('data-last-x') || '0');
+    const lastY = parseFloat(canvas.getAttribute('data-last-y') || '0');
+    drawOnCanvas(lastX, lastY, x, y, brushColor, brushSize, true);
+    canvas.setAttribute('data-last-x', x.toString());
+    canvas.setAttribute('data-last-y', y.toString());
+  };
+
+  // Whiteboard Undo
+  const handleWbUndo = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    if (wbUndoStackRef.current.length === 0) return;
+    // Save current state to redo
+    wbRedoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    const prev = wbUndoStackRef.current.pop()!;
+    ctx.putImageData(prev, 0, 0);
+    setWbHistoryVersion((v) => v + 1);
+  };
+
+  // Whiteboard Redo
+  const handleWbRedo = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    if (wbRedoStackRef.current.length === 0) return;
+    wbUndoStackRef.current.push(ctx.getImageData(0, 0, canvas.width, canvas.height));
+    const next = wbRedoStackRef.current.pop()!;
+    ctx.putImageData(next, 0, 0);
+    setWbHistoryVersion((v) => v + 1);
+  };
+
+  // Whiteboard Clear All (undoable)
+  const handleWbClearAll = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    wbPushUndo();
+    wbRedoStackRef.current = [];
+    ctx.fillStyle = '#0a0a0f';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    setWbHistoryVersion((v) => v + 1);
   };
 
   // 5. Chat Actions
@@ -686,7 +798,7 @@ export default function MeetingRoomPage() {
 
         {/* Right Side: Reusable Tab Drawer Panels */}
         {activeTab !== 'none' && (
-          <aside className="fixed md:static top-16 right-0 bottom-20 w-80 md:w-96 border-l border-border-subtle bg-bg-surface/90 backdrop-blur-lg flex flex-col justify-between z-10 overflow-hidden">
+          <aside className="fixed md:static top-16 right-0 bottom-[5rem] w-80 md:w-96 border-l border-border-subtle bg-bg-surface/90 backdrop-blur-lg flex flex-col justify-between z-30 overflow-hidden">
             {/* Header tab control */}
             <div className="h-14 border-b border-border-subtle flex items-center justify-between px-4">
               <h3 className="text-sm font-bold font-display capitalize">
@@ -748,10 +860,39 @@ export default function MeetingRoomPage() {
                       onMouseMove={handleMouseMove}
                       onMouseUp={handleMouseUp}
                       onMouseLeave={handleMouseUp}
-                      className="h-full w-full cursor-crosshair"
+                      onTouchStart={handleWbTouchStart}
+                      onTouchMove={handleWbTouchMove}
+                      onTouchEnd={handleMouseUp}
+                      className="h-full w-full cursor-crosshair touch-none"
                     />
                   </div>
-                  <div className="mt-4 flex items-center justify-between">
+                  {/* Undo / Redo / Clear row */}
+                  <div className="mt-3 flex items-center gap-2">
+                    <button
+                      onClick={handleWbUndo}
+                      disabled={wbUndoStackRef.current.length === 0}
+                      className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-bg-base border border-border-default text-text-secondary hover:text-white transition text-[10px] font-bold disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
+                      title="Undo"
+                    >
+                      Undo
+                    </button>
+                    <button
+                      onClick={handleWbRedo}
+                      disabled={wbRedoStackRef.current.length === 0}
+                      className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-bg-base border border-border-default text-text-secondary hover:text-white transition text-[10px] font-bold disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center"
+                      title="Redo"
+                    >
+                      Redo
+                    </button>
+                    <button
+                      onClick={handleWbClearAll}
+                      className="min-h-[44px] min-w-[44px] p-2 rounded-xl bg-semantic-error/15 border border-semantic-error/30 text-semantic-error hover:bg-semantic-error hover:text-white transition text-[10px] font-bold flex items-center justify-center"
+                      title="Clear All"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div className="mt-2 flex items-center justify-between">
                     {/* Brush Sizes */}
                     <div className="flex gap-1.5">
                       {[2, 4, 8].map((size) => (
@@ -815,7 +956,7 @@ export default function MeetingRoomPage() {
       </div>
 
       {/* Bottom Floating Controls Bar */}
-      <footer className="h-20 border-t border-border-subtle bg-bg-surface/80 backdrop-blur-md flex items-center justify-center gap-4 px-6 z-30 fixed bottom-0 left-0 right-0 pb-[env(safe-area-inset-bottom)] md:static md:relative md:pb-0">
+      <footer className="min-h-[5rem] border-t border-border-subtle bg-bg-surface/90 backdrop-blur-md flex items-center justify-center flex-wrap gap-2 sm:gap-4 px-3 sm:px-6 py-2 z-40 fixed bottom-0 left-0 right-0" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
         <button
           onClick={handleToggleAudio}
           className={`p-3.5 rounded-full border transition duration-200 ${micEnabled ? 'border-border-default hover:bg-bg-elevated text-text-primary' : 'border-semantic-error/40 bg-semantic-error/10 text-semantic-error hover:bg-semantic-error/20'}`}
