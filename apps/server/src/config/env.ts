@@ -14,7 +14,7 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(10, 'JWT_REFRESH_SECRET must be at least 10 chars'),
   JWT_ACCESS_EXPIRES: z.string().default('15m'),
   JWT_REFRESH_EXPIRES: z.string().default('7d'),
-  COOKIE_DOMAIN: z.string().default('localhost'),
+  COOKIE_DOMAIN: z.string().optional(),
   COOKIE_SECURE: z.preprocess((val) => val === 'true', z.boolean()).default(false),
   RESEND_API_KEY: z.string().optional(),
   EMAIL_FROM: z.string().default('SyncSpace <noreply@syncspace.app>'),

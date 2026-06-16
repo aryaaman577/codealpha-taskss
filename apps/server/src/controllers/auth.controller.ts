@@ -22,27 +22,43 @@ import { AuthRequest } from '../middleware/auth.middleware';
 
 
 const setTokenCookies = (res: Response, accessToken: string, refreshToken: string) => {
-  const common = {
+  const isProduction = env.NODE_ENV === 'production';
+  // Cross-domain (Vercel frontend ↔ Railway backend) requires sameSite 'none' + secure
+  const cookieDomain = env.COOKIE_DOMAIN && env.COOKIE_DOMAIN !== 'localhost' ? env.COOKIE_DOMAIN : undefined;
+  const common: {
+    httpOnly: boolean;
+    secure: boolean;
+    sameSite: 'none' | 'lax';
+    domain?: string;
+  } = {
     httpOnly: true,
-    secure: env.NODE_ENV === 'production',
-    sameSite: 'lax' as const,
-    domain: env.COOKIE_DOMAIN || undefined,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+    ...(cookieDomain ? { domain: cookieDomain } : {}),
   };
 
   res.cookie('access_token', accessToken, {
     ...common,
     maxAge: 15 * 60 * 1000,
+    path: '/',
   });
   res.cookie('refresh_token', refreshToken, {
     ...common,
     maxAge: 7 * 24 * 60 * 60 * 1000,
-    path: '/api/auth/refresh',
+    path: '/',
   });
 };
 
 const clearTokenCookies = (res: Response) => {
-  res.clearCookie('access_token');
-  res.clearCookie('refresh_token', { path: '/api/auth/refresh' });
+  const isProduction = env.NODE_ENV === 'production';
+  const clearOpts: { path: string; httpOnly: boolean; secure: boolean; sameSite: 'none' | 'lax' } = {
+    path: '/',
+    httpOnly: true,
+    secure: isProduction,
+    sameSite: isProduction ? 'none' : 'lax',
+  };
+  res.clearCookie('access_token', clearOpts);
+  res.clearCookie('refresh_token', clearOpts);
 };
 
 const stripUser = (user: any) => {
