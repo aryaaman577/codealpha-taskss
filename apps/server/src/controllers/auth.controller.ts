@@ -23,17 +23,16 @@ import { AuthRequest } from '../middleware/auth.middleware';
 
 const setTokenCookies = (res: Response, accessToken: string, refreshToken: string) => {
   const isProduction = env.NODE_ENV === 'production';
-  // Cross-domain (Vercel frontend ↔ Railway backend) requires sameSite 'none' + secure
   const cookieDomain = env.COOKIE_DOMAIN && env.COOKIE_DOMAIN !== 'localhost' ? env.COOKIE_DOMAIN : undefined;
   const common: {
     httpOnly: boolean;
     secure: boolean;
-    sameSite: 'none' | 'lax';
+    sameSite: 'lax';
     domain?: string;
   } = {
     httpOnly: true,
     secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
+    sameSite: 'lax',
     ...(cookieDomain ? { domain: cookieDomain } : {}),
   };
 
@@ -51,11 +50,11 @@ const setTokenCookies = (res: Response, accessToken: string, refreshToken: strin
 
 const clearTokenCookies = (res: Response) => {
   const isProduction = env.NODE_ENV === 'production';
-  const clearOpts: { path: string; httpOnly: boolean; secure: boolean; sameSite: 'none' | 'lax' } = {
+  const clearOpts: { path: string; httpOnly: boolean; secure: boolean; sameSite: 'lax' } = {
     path: '/',
     httpOnly: true,
     secure: isProduction,
-    sameSite: isProduction ? 'none' : 'lax',
+    sameSite: 'lax',
   };
   res.clearCookie('access_token', clearOpts);
   res.clearCookie('refresh_token', clearOpts);

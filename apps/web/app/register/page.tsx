@@ -53,7 +53,7 @@ export default function RegisterPage() {
   };
 
   const handleGoogleLogin = () => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || '/api';
     window.location.href = `${apiUrl}/auth/google`;
   };
 
