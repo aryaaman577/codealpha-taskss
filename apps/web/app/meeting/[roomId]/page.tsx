@@ -266,6 +266,31 @@ export default function MeetingRoomPage() {
     }
   };
 
+  const handleIceRestart = async (socketId: string) => {
+    const pc = pcs.current[socketId];
+    if (!pc) return;
+
+    // Glare mitigation: only the peer with the lexicographically smaller socket ID initiates restart
+    const myId = socket.id;
+    if (!myId) {
+      console.warn('Socket ID not available for ICE restart check');
+      return;
+    }
+
+    if (myId < socketId) {
+      console.log(`Self (${myId}) is lexicographically smaller than remote (${socketId}). Initiating offer with iceRestart.`);
+      try {
+        const offer = await pc.createOffer({ iceRestart: true });
+        await pc.setLocalDescription(offer);
+        socket.emit('rtc:offer', { targetSocketId: socketId, sdp: pc.localDescription });
+      } catch (err) {
+        console.error(`Error creating ICE restart offer for peer ${socketId}:`, err);
+      }
+    } else {
+      console.log(`Self (${myId}) is lexicographically larger than remote (${socketId}). Waiting for remote to initiate ICE restart.`);
+    }
+  };
+
   const createOrGetPeerConnection = (socketId: string, stream: MediaStream): RTCPeerConnection => {
     const existing = pcs.current[socketId];
     if (existing) return existing;
@@ -278,16 +303,26 @@ export default function MeetingRoomPage() {
     const turnUrl = process.env.NEXT_PUBLIC_TURN_URL;
     const turnUsername = process.env.NEXT_PUBLIC_TURN_USERNAME;
     const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
+    const forceTurn = process.env.NEXT_PUBLIC_FORCE_TURN === 'true';
 
     if (turnUrl && turnUsername && turnCredential) {
-      iceServers.push({
-        urls: turnUrl,
-        username: turnUsername,
-        credential: turnCredential,
-      });
+      const urls = turnUrl.split(',').map((url) => url.trim()).filter(Boolean);
+      if (urls.length > 0) {
+        iceServers.push({
+          urls: urls,
+          username: turnUsername,
+          credential: turnCredential,
+        });
+      }
     }
 
-    const pc = new RTCPeerConnection({ iceServers });
+    console.log(`Initializing RTCPeerConnection for ${socketId} with policy: ${forceTurn ? 'relay' : 'all'}`);
+    const pc = new RTCPeerConnection({
+      iceServers,
+      iceTransportPolicy: forceTurn ? 'relay' : 'all',
+      bundlePolicy: 'max-bundle',
+      rtcpMuxPolicy: 'require'
+    });
 
     const activeVideoStream = (screenSharing && useMeetingStore.getState().screenStream)
       ? useMeetingStore.getState().screenStream
@@ -322,15 +357,22 @@ export default function MeetingRoomPage() {
     // Emit ICE candidates to signaling server
     pc.onicecandidate = (event) => {
       if (event.candidate) {
+        console.log(`Local ICE candidate gathered for peer ${socketId}:`, {
+          candidate: event.candidate.candidate,
+          sdpMid: event.candidate.sdpMid,
+          sdpMLineIndex: event.candidate.sdpMLineIndex,
+        });
         socket.emit('rtc:ice-candidate', {
           targetSocketId: socketId,
           candidate: event.candidate,
         });
+      } else {
+        console.log(`Local ICE candidate gathering completed for peer ${socketId}`);
       }
     };
 
     pc.oniceconnectionstatechange = () => {
-      console.log('ICE connection state change for:', socketId, pc.iceConnectionState);
+      console.log(`ICE connection state change for peer ${socketId}: ${pc.iceConnectionState}`);
       setRemotePeers((prev) => {
         if (!prev[socketId]) return prev;
         return {
@@ -341,6 +383,23 @@ export default function MeetingRoomPage() {
           },
         };
       });
+
+      if (pc.iceConnectionState === 'failed') {
+        console.warn(`ICE connection state failed for peer ${socketId}. Triggering ICE restart.`);
+        handleIceRestart(socketId);
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log(`Connection state change for peer ${socketId}: ${pc.connectionState}`);
+      if (pc.connectionState === 'failed') {
+        console.warn(`Connection state failed for peer ${socketId}. Triggering ICE restart.`);
+        handleIceRestart(socketId);
+      }
+    };
+
+    pc.onsignalingstatechange = () => {
+      console.log(`Signaling state change for peer ${socketId}: ${pc.signalingState}`);
     };
 
     pcs.current[socketId] = pc;
@@ -365,7 +424,7 @@ export default function MeetingRoomPage() {
   const setupSignaling = (stream: MediaStream) => {
     const processIceQueue = async (socketId: string) => {
       const pc = pcs.current[socketId];
-      if (!pc || !pc.remoteDescription) return;
+      if (!pc || !pc.remoteDescription || !pc.remoteDescription.type) return;
 
       const queue = iceQueues.current[socketId] || [];
       iceQueues.current[socketId] = [];
@@ -467,14 +526,21 @@ export default function MeetingRoomPage() {
       if (!pc) return;
       if (!data?.candidate) return;
 
+      console.log(`Received remote ICE candidate from ${data.socketId}:`, {
+        candidate: data.candidate.candidate,
+        sdpMid: data.candidate.sdpMid,
+        sdpMLineIndex: data.candidate.sdpMLineIndex,
+      });
+
       const candidate = new RTCIceCandidate(data.candidate);
-      if (pc.remoteDescription) {
+      if (pc.remoteDescription && pc.remoteDescription.type) {
         try {
           await pc.addIceCandidate(candidate);
         } catch (err) {
-          console.error('Error adding ICE candidate:', err);
+          console.error(`Error adding ICE candidate for peer ${data.socketId}:`, err);
         }
       } else {
+        console.log(`Queuing ICE candidate for peer ${data.socketId} because remoteDescription is not set yet.`);
         if (!iceQueues.current[data.socketId]) {
           iceQueues.current[data.socketId] = [];
         }
