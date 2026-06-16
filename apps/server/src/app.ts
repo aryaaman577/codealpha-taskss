@@ -19,6 +19,7 @@ import analyticsRoutes from './routes/analytics.routes';
 import { env } from './config/env';
 
 const app = express();
+app.set('trust proxy', 1);
 
 const allowedOrigins = env.CLIENT_URL
   ? env.CLIENT_URL.split(',').map((o) => o.trim().replace(/\/$/, ''))

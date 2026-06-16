@@ -143,7 +143,8 @@ export const login = async (req: Request, res: Response, next: NextFunction) => 
 
 export const refreshToken = async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const oldRefreshToken = req.cookies.refresh_token;
+    const oldRefreshToken = req.cookies?.refresh_token;
+    console.log("Refresh cookie presence: refresh=" + Boolean(oldRefreshToken));
     if (!oldRefreshToken) throw new AppError('No refresh token provided', 401);
 
     let decoded: any;
@@ -540,6 +541,7 @@ export const googleCallback = async (req: Request, res: Response, next: NextFunc
     await user.save({ validateBeforeSave: false });
 
     setTokenCookies(res, accessToken, newRefreshToken);
+    console.log("Google callback cookies set: access=true refresh=true");
 
     // Redirect to dashboard — tokens are in HttpOnly cookies, not in URL
     return res.redirect(`${clientUrl}/dashboard`);

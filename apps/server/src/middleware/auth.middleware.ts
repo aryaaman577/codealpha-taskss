@@ -10,7 +10,8 @@ export interface AuthRequest extends Request {
 
 export const protect = async (req: AuthRequest, res: Response, next: NextFunction) => {
   try {
-    const token = req.cookies.access_token;
+    const token = req.cookies?.access_token;
+    console.log("Auth cookie presence: access=" + Boolean(token));
     if (!token) {
       throw new AppError('You are not logged in. Please log in.', 401);
     }
