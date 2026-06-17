@@ -257,6 +257,9 @@ export default function MeetingRoomPage() {
         socket.emit('chat:join', { roomId: activeMeeting._id, type: 'meeting' });
       }
 
+      // Join the whiteboard room for collaborative drawing sync
+      socket.emit('whiteboard:join', { whiteboardId: roomId });
+
       toast.success('Joined meeting room');
     } catch (err: any) {
       console.error(err);
@@ -374,6 +377,18 @@ export default function MeetingRoomPage() {
       drawOnCanvas(data.startX, data.startY, data.endX, data.endY, data.color, data.size, false);
     };
 
+    const onWhiteboardClear = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      wbPushUndo();
+      wbRedoStackRef.current = [];
+      ctx.fillStyle = '#0a0a0f';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      setWbHistoryVersion((v) => v + 1);
+    };
+
     const onParticipantMediaState = (data: {
       socketId: string;
       audioMuted?: boolean;
@@ -407,6 +422,7 @@ export default function MeetingRoomPage() {
     socket.on('chat:message:new', onChatMessageNew);
     socket.on('message:new', onChatMessageNew);
     socket.on('whiteboard:object:add', onWhiteboardObjectAdd);
+    socket.on('whiteboard:clear', onWhiteboardClear);
 
     return () => {
       socket.off('meeting:room-active-peers', onRoomActivePeers);
@@ -419,6 +435,7 @@ export default function MeetingRoomPage() {
       socket.off('chat:message:new', onChatMessageNew);
       socket.off('message:new', onChatMessageNew);
       socket.off('whiteboard:object:add', onWhiteboardObjectAdd);
+      socket.off('whiteboard:clear', onWhiteboardClear);
     };
   };
 
@@ -608,6 +625,7 @@ export default function MeetingRoomPage() {
     ctx.fillStyle = '#0a0a0f';
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     setWbHistoryVersion((v) => v + 1);
+    socket.emit('whiteboard:clear', { whiteboardId: roomId });
   };
 
   // 5. Chat Actions
@@ -633,6 +651,30 @@ export default function MeetingRoomPage() {
     });
   };
 
+  // Initialize meeting whiteboard canvas background and undo stack
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const resizeCanvas = () => {
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        canvas.width = rect.width;
+        canvas.height = rect.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+        ctx.fillStyle = '#0a0a0f';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        wbUndoStackRef.current = [ctx.getImageData(0, 0, canvas.width, canvas.height)];
+        wbRedoStackRef.current = [];
+        setWbHistoryVersion((v) => v + 1);
+      }
+    };
+    resizeCanvas();
+    const observer = new ResizeObserver(resizeCanvas);
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [activeTab]);
+
   // Sync hook connection states to remotePeers display metadata
   useEffect(() => {
     if (connectionStates.size === 0) return;
@@ -650,7 +692,7 @@ export default function MeetingRoomPage() {
   }, [connectionStates]);
 
   return (
-    <main className="min-h-screen bg-bg-base text-text-primary flex flex-col justify-between relative pb-24">
+    <main className="min-h-screen bg-bg-base text-text-primary flex flex-col justify-between relative pb-32">
       {/* Autoplay Blocker Warning Banner */}
       {autoplayBlocked && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 bg-accent-primary border border-accent-primary/40 px-5 py-3 rounded-2xl shadow-glow-sm flex items-center gap-4 max-w-sm backdrop-blur-lg">
@@ -798,7 +840,7 @@ export default function MeetingRoomPage() {
 
         {/* Right Side: Reusable Tab Drawer Panels */}
         {activeTab !== 'none' && (
-          <aside className="fixed md:static top-16 right-0 bottom-[5rem] w-80 md:w-96 border-l border-border-subtle bg-bg-surface/90 backdrop-blur-lg flex flex-col justify-between z-30 overflow-hidden">
+          <aside className="fixed md:static top-16 right-0 bottom-[7rem] w-80 md:w-96 border-l border-border-subtle bg-bg-surface/90 backdrop-blur-lg flex flex-col justify-between z-30 overflow-hidden">
             {/* Header tab control */}
             <div className="h-14 border-b border-border-subtle flex items-center justify-between px-4">
               <h3 className="text-sm font-bold font-display capitalize">
@@ -854,8 +896,6 @@ export default function MeetingRoomPage() {
                   <div className="border border-border-default rounded-2xl overflow-hidden bg-bg-base flex-1 relative min-h-[300px]">
                     <canvas
                       ref={canvasRef}
-                      width={350}
-                      height={400}
                       onMouseDown={handleMouseDown}
                       onMouseMove={handleMouseMove}
                       onMouseUp={handleMouseUp}
@@ -956,7 +996,7 @@ export default function MeetingRoomPage() {
       </div>
 
       {/* Bottom Floating Controls Bar */}
-      <footer className="min-h-[5rem] border-t border-border-subtle bg-bg-surface/90 backdrop-blur-md flex items-center justify-center flex-wrap gap-2 sm:gap-4 px-3 sm:px-6 py-2 z-40 fixed bottom-0 left-0 right-0" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
+      <footer className="min-h-[7rem] border-t border-border-subtle bg-bg-surface/90 backdrop-blur-md flex items-center justify-center flex-wrap gap-2 sm:gap-4 px-2 sm:px-6 py-3 z-40 fixed bottom-0 left-0 right-0" style={{ paddingBottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}>
         <button
           onClick={handleToggleAudio}
           className={`p-3.5 rounded-full border transition duration-200 ${micEnabled ? 'border-border-default hover:bg-bg-elevated text-text-primary' : 'border-semantic-error/40 bg-semantic-error/10 text-semantic-error hover:bg-semantic-error/20'}`}

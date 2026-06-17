@@ -1,0 +1,80 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "autoupdate": true,
+  "provider": {
+    "freellmapi": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "FreeLLMAPI Local",
+      "options": {
+        "baseURL": "http://localhost:3001/v1",
+        "apiKey": "{env:FREELLMAPI_API_KEY}"
+      },
+      "models": {
+        "freellmapi-d6ff8f948bb33747a5a78ff2ca0dc641f6e0f71f6d20e172": {
+          "name": "FreeLLMAPI Main Coding Model"
+        }
+      }
+    }
+  },
+  "model": "freellmapi/freellmapi-d6ff8f948bb33747a5a78ff2ca0dc641f6e0f71f6d20e172",
+  "small_model": "freellmapi/freellmapi-d6ff8f948bb33747a5a78ff2ca0dc641f6e0f71f6d20e172",
+  "mcp": {
+    // Public documentation search — enabled by default, light usage
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.com/mcp",
+      "enabled": true
+    },
+    // Public code search across GitHub — enabled by default, light usage
+    "gh_grep": {
+      "type": "remote",
+      "url": "https://mcp.grep.app",
+      "enabled": true
+    },
+    // Browser automation for UI testing — disabled by default (heavy).
+    // Enable only when you need to test UI flows or take screenshots.
+    "playwright": {
+      "type": "local",
+      "command": ["npx", "-y", "@playwright/mcp@latest", "--headless"],
+      "enabled": false
+    },
+    // GitHub API access — disabled by default (needs token).
+    // Enable when you need to create PRs, issues, or read repos.
+    "github": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+      "enabled": false,
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    // Full filesystem access — disabled by default (security risk).
+    // Enable only if an MCP tool needs to read/write files outside the workspace.
+    "filesystem": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "."],
+      "enabled": false
+    },
+    // Sequential thinking for complex multi-step reasoning — disabled by default.
+    // Enable for architecting complex systems or deep debugging.
+    "sequential_thinking": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "enabled": false
+    },
+    // Persistent memory across sessions — disabled by default.
+    // Enable if you need the agent to remember across conversations.
+    "memory": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-memory"],
+      "enabled": false
+    },
+    // Web fetch for reading URLs — disabled by default (built-in fetch available).
+    // Enable if you need structured web fetching from MCP tools.
+    "fetch": {
+      "type": "local",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-fetch"],
+      "enabled": false
+    }
+  }
+}

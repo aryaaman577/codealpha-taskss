@@ -71,7 +71,20 @@ export default function WhiteboardPage() {
       drawOnCanvas(data.startX, data.startY, data.endX, data.endY, data.color, data.size, false);
     };
 
+    const handleRemoteClear = () => {
+      const canvas = canvasRef.current;
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      pushUndoSnapshot();
+      redoStackRef.current = [];
+      ctx.fillStyle = canvasBackground;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      clearCanvas();
+    };
+
     socket.on('whiteboard:object:add', handleIncomingAdd);
+    socket.on('whiteboard:clear', handleRemoteClear);
 
     // Initial canvas setup
     const canvas = canvasRef.current;
@@ -89,6 +102,7 @@ export default function WhiteboardPage() {
 
     return () => {
       socket.off('whiteboard:object:add', handleIncomingAdd);
+      socket.off('whiteboard:clear', handleRemoteClear);
     };
   }, []);
 
@@ -267,6 +281,7 @@ export default function WhiteboardPage() {
     ctx.fillStyle = canvasBackground;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     clearCanvas();
+    socket.emit('whiteboard:clear', { whiteboardId: 'global-canvas' });
     toast.success('Canvas cleared — use Undo to restore');
   };
 

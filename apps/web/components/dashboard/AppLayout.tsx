@@ -165,10 +165,15 @@ export default function AppLayout({ children }: AppLayoutProps) {
     );
   }
 
+  const isInMeeting = pathname.startsWith('/meeting/');
+
   const menuItems = [
     { name: 'Home', icon: <Compass size={18} />, href: '/' },
     { name: 'Dashboard', icon: <LayoutDashboard size={18} />, href: '/dashboard' },
     { name: 'Meetings', icon: <Video size={18} />, href: '/meetings' },
+    ...(isInMeeting
+      ? [{ name: 'Return to Meeting', icon: <Video size={18} />, href: pathname }]
+      : []),
     { name: 'Channels & Chat', icon: <MessageSquare size={18} />, href: '/chat' },
     { name: 'Whiteboard', icon: <PenTool size={18} />, href: '/whiteboard' },
     { name: 'Shared Files', icon: <Folder size={18} />, href: '/files' },

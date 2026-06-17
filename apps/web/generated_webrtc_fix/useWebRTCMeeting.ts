@@ -59,15 +59,17 @@ const getIceServers = (): RTCIceServer[] => {
   const turnCredential = process.env.NEXT_PUBLIC_TURN_CREDENTIAL;
 
   if (turnUrls) {
-    const urls = turnUrls.split(",").map(u => u.trim());
-    return [
-      ...stunServers,
-      {
-        urls,
-        username: turnUsername,
-        credential: turnCredential,
-      }
-    ];
+    const urls = turnUrls.split(",").map(u => u.trim()).filter(Boolean);
+    if (urls.length > 0) {
+      return [
+        ...stunServers,
+        {
+          urls,
+          ...(turnUsername ? { username: turnUsername } : {}),
+          ...(turnCredential ? { credential: turnCredential } : {}),
+        }
+      ];
+    }
   }
 
   return stunServers;
@@ -817,8 +819,8 @@ export function useWebRTCMeeting({
 
       debug("ice-candidate-received", {
         fromSocketId,
-        protocol: (candidate as RTCIceCandidate).protocol,
-        type: (candidate as RTCIceCandidate).type,
+        candidate: candidate.candidate?.substring(0, 120),
+        sdpMid: candidate.sdpMid,
       });
 
       const pc = peerConnsRef.current.get(fromSocketId);
